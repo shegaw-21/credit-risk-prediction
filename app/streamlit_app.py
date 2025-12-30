@@ -7,6 +7,25 @@ import joblib
 from pathlib import Path
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 import shap
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import warnings
+import sys
+import traceback
+
+# Configure warnings and error handling
+warnings.filterwarnings('ignore')
+
+# Global exception handler to prevent crashes
+def handle_exception(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    st.error(f"An unexpected error occurred: {exc_value}")
+    print("Error details:", ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback)))
+
+sys.excepthook = handle_exception
 
 # -------------------------------------------------------------------
 # Feature configuration shared between single and batch prediction
@@ -85,7 +104,7 @@ if model is None or df.empty:
 st.title("Credit Risk Prediction Dashboard")
 
 # Sidebar for navigation
-page = st.sidebar.selectbox("Choose a page", ["Prediction", "Batch Prediction", "EDA", "Model Insights", "Data Summary", "Model Performance", "About"])
+page = st.sidebar.selectbox("Choose a page", ["Prediction", "Batch Prediction", "EDA", "Model Insights", "Data Summary", "Model Performance", "Feature Selection", "About"])
 
 if page == "Prediction":
     st.header("Loan Default Prediction")
@@ -364,9 +383,10 @@ elif page == "Model Insights":
         ax.set_title('Top 20 Feature Importances')
         st.pyplot(fig)
     
-    # SHAP Explanation
+    # SHAP Explanation - Temporarily disabled for stability
     st.subheader("Model Explainability")
-    st.write("SHAP explanations are not available due to library compatibility issues. Feature importance is shown above for model interpretability.")
+    st.info("SHAP analysis temporarily disabled for app stability. Feature importance is shown above.")
+    st.write("The basic feature importance plot (shown above) provides insights into which factors most influence loan default predictions.")
 
 elif page == "Data Summary":
     st.header("Data Summary")
@@ -396,7 +416,7 @@ elif page == "Model Performance":
     
     try:
         X_test = pd.read_csv(str(PROJECT_ROOT / 'data' / 'processed' / 'X_test.csv'))
-        y_test = pd.read_csv(str(PROJECT_ROOT / 'data' / 'processed' / 'y_test.csv'))
+        y_test = pd.read_csv(str(PROJECT_ROOT / 'data' / 'processed' / 'y_test.csv')).iloc[:, 0]
         
         # Predictions
         y_pred = model.predict(X_test)
@@ -406,7 +426,10 @@ elif page == "Model Performance":
         
         st.subheader("Classification Report")
         report = classification_report(y_test, y_pred, output_dict=True)
-        st.dataframe(pd.DataFrame(report).transpose())
+        report_df = pd.DataFrame(report).transpose()
+        # Fix PyArrow compatibility issues
+        report_df = report_df.astype('float64')
+        st.dataframe(report_df)
         
         st.subheader("Confusion Matrix")
         cm = confusion_matrix(y_test, y_pred)
@@ -436,6 +459,79 @@ elif page == "Model Performance":
         st.error("Test data not found. Please run the preprocessing and modeling notebooks.")
     except Exception as e:
         st.error(f"Error loading performance metrics: {e}")
+
+elif page == "Feature Selection":
+    st.header("Feature Selection Analysis")
+    
+    try:
+        import sys
+        sys.path.append(str(PROJECT_ROOT / 'src'))
+        from features.feature_selector import FeatureSelector
+        from visualization.eda_plots import EDAPlots
+        
+        # Load processed data
+        X_train = pd.read_csv(str(PROJECT_ROOT / 'data' / 'processed' / 'X_train.csv'))
+        y_train = pd.read_csv(str(PROJECT_ROOT / 'data' / 'processed' / 'y_train.csv')).iloc[:, 0]
+        
+        selector = FeatureSelector()
+        
+        st.subheader("Statistical Feature Selection")
+        method = st.selectbox("Select method", ["f_classif", "mutual_info"])
+        k = st.slider("Number of features to select", 5, 30, 20)
+        
+        if st.button("Run Statistical Selection"):
+            selected_features, scores_df = selector.statistical_feature_selection(X_train, y_train, method=method, k=k)
+            
+            st.write(f"Selected {len(selected_features)} features:")
+            st.write(selected_features)
+            
+            # Plot scores
+            fig, ax = plt.subplots(figsize=(10, 6))
+            scores_df.head(k).plot(kind='bar', x='feature', y='score', ax=ax)
+            ax.set_title(f'Top {k} Features - {method.upper()} Scores')
+            ax.set_xlabel('Features')
+            ax.set_ylabel('Score')
+            plt.xticks(rotation=45)
+            st.pyplot(fig)
+        
+        st.subheader("Model-Based Feature Selection")
+        model_type = st.selectbox("Select model type", ["random_forest", "logistic"])
+        
+        if st.button("Run Model-Based Selection"):
+            selected_features = selector.model_based_selection(X_train, y_train, model_type=model_type, k=k)
+            
+            st.write(f"Selected {len(selected_features)} features:")
+            st.write(selected_features)
+            
+            # Plot feature importance
+            fig = selector.plot_feature_importance(model_type=model_type, top_n=k)
+            st.pyplot(fig)
+        
+        st.subheader("Correlation Analysis")
+        threshold = st.slider("Correlation threshold", 0.8, 0.99, 0.95)
+        
+        if st.button("Remove Highly Correlated Features"):
+            features_to_keep = selector.correlation_based_selection(X_train, threshold=threshold)
+            st.write(f"Features to keep: {len(features_to_keep)}")
+            st.write(f"Features removed: {len(X_train.columns) - len(features_to_keep)}")
+            st.write(features_to_keep)
+        
+        st.subheader("Complete Feature Selection Pipeline")
+        if st.button("Run Complete Pipeline"):
+            final_features = selector.select_features_pipeline(X_train, y_train, k=k)
+            st.write(f"Final selected features ({len(final_features)}):")
+            st.write(final_features)
+            
+            # Show selection log
+            st.subheader("Selection Process Log")
+            log = selector.get_selection_log()
+            for entry in log:
+                st.write(f"• {entry}")
+                
+    except ImportError:
+        st.error("Feature selection modules not available. Please ensure src/ modules are properly installed.")
+    except Exception as e:
+        st.error(f"Error in feature selection: {e}")
 
 elif page == "About":
     st.header("About This Project")

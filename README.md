@@ -1,7 +1,47 @@
 # Credit Risk Prediction Project
 
-## Overview
-This project develops a machine learning model to predict credit risk using the credit_risk_dataset.csv. The dataset contains information about loan applicants, and the goal is to classify whether a loan will default (loan_status = 1) or not.
+## Table of Contents
+- [Project Overview](#project-overview)
+- [Learning Outcomes](#learning-outcomes)
+- [Dataset](#dataset)
+- [Project Structure](#project-structure)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Models and Methodology](#models-and-methodology)
+- [Results](#results)
+- [Dashboard](#dashboard)
+- [Key Findings and Insights](#key-findings-and-insights)
+- [Future Work](#future-work)
+- [License](#license)
+
+## Project Overview
+This comprehensive data science project develops a machine learning model to predict credit risk using the credit_risk_dataset.csv. The dataset contains information about loan applicants, and the goal is to classify whether a loan will default (loan_status = 1) or not.
+
+The project follows a complete data science workflow from exploratory data analysis through model deployment, demonstrating proficiency in data cleaning, preprocessing, modeling, evaluation, and interpretation.
+
+## Learning Outcomes
+
+### Skills Developed
+- **Data Cleaning & Preprocessing**: Handling missing values, outlier detection, data transformation, feature scaling, and data type conversions
+- **Exploratory Data Analysis (EDA)**: Univariate, bivariate, and multivariate analysis, hypothesis testing, and data visualization to uncover insights and patterns
+- **Machine Learning Modeling**: Implementing and training various ML algorithms, understanding model assumptions, and hyperparameter tuning
+- **Model Evaluation & Selection**: Applying appropriate metrics for imbalanced classification, cross-validation, and model comparison
+- **Feature Engineering and Selection**: Creating new features from existing ones to improve model performance
+
+### Tools Utilized
+- **Python**: Proficient use for data manipulation, analysis, and modeling
+- **Pandas**: Data loading, cleaning, transformation, and analysis
+- **Scikit-learn**: Implementing various machine learning algorithms, preprocessing techniques, and model selection utilities
+- **Matplotlib/Seaborn/Plotly**: Creating compelling static and interactive data visualizations
+- **Jupyter Notebooks**: Interactive development and documentation of data science workflows
+- **Streamlit**: Building interactive web applications for model deployment
+- **SHAP**: Model interpretability and explainability
+
+### Knowledge Gained
+- **Imbalanced Classification**: Strategies for handling imbalanced datasets using class weights and exploring SMOTE
+- **Feature Encoding**: Applying various encoding techniques for categorical features (One-Hot Encoding, Label Encoding)
+- **Model Interpretability**: Techniques to understand and explain model predictions using SHAP values
+- **Deployment Concepts**: Deploying machine learning models using Streamlit web framework
 
 ## Dataset
 - **Source**: credit_risk_dataset.csv
