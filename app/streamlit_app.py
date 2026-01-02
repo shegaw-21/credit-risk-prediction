@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import joblib
 from pathlib import Path
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import RobustScaler, LabelEncoder
 import shap
 import plotly.express as px
 import plotly.graph_objects as go
@@ -38,6 +38,8 @@ NUMERICAL_FEATURES = [
     'loan_int_rate',
     'loan_percent_income',
     'cb_person_cred_hist_length',
+    'person_income_log',
+    'income_per_age',
     'debt_to_income',
 ]
 
@@ -49,6 +51,8 @@ EXPECTED_MODEL_COLUMNS = [
     'loan_int_rate',
     'loan_percent_income',
     'cb_person_cred_hist_length',
+    'person_income_log',
+    'income_per_age',
     'debt_to_income',
     'loan_grade_encoded',
     'cb_person_default_on_file_encoded',
@@ -77,7 +81,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def load_model():
     try:
         model = joblib.load(str(PROJECT_ROOT / 'models' / 'best_model.pkl'))
-        scaler = joblib.load(str(PROJECT_ROOT / 'models' / 'scaler.pkl'))
+        scaler = joblib.load(str(PROJECT_ROOT / 'models' / 'robust_scaler.pkl'))
         le_loan_grade = joblib.load(str(PROJECT_ROOT / 'models' / 'le_loan_grade.pkl'))
         le_default = joblib.load(str(PROJECT_ROOT / 'models' / 'le_default.pkl'))
         return model, scaler, le_loan_grade, le_default
@@ -127,14 +131,52 @@ if page == "Prediction":
         cb_person_default_on_file = st.selectbox("Historical Default", ["N", "Y"])
         cb_person_cred_hist_length = st.slider("Credit History Length (years)", 0, 50, 5)
     
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("🔴 Apply High Risk Test Values"):
+            st.session_state.test_high_risk = True
+            st.session_state.test_low_risk = False
+    with col2:
+        if st.button("🟢 Apply Low Risk Test Values"):
+            st.session_state.test_low_risk = True
+            st.session_state.test_high_risk = False
+    with col3:
+        if st.button("🔄 Reset"):
+            st.session_state.test_high_risk = False
+            st.session_state.test_low_risk = False
+    
+    # Apply test values if buttons clicked
+    if st.session_state.get('test_high_risk', False):
+        st.info("🔴 High Risk Test Values Applied")
+        person_age = 22
+        person_income = 15000
+        person_home_ownership = "RENT"
+        loan_intent = "PERSONAL"
+        loan_grade = "F"
+        loan_percent_income = 0.5
+        loan_amnt = 75000
+        loan_int_rate = 25.0
+        person_emp_length = 0.5
+        cb_person_default_on_file = "Y"
+        cb_person_cred_hist_length = 1
+    elif st.session_state.get('test_low_risk', False):
+        st.info("🟢 Low Risk Test Values Applied")
+        person_age = 45
+        person_income = 150000
+        person_home_ownership = "OWN"
+        loan_intent = "HOMEIMPROVEMENT"
+        loan_grade = "A"
+        loan_percent_income = 0.1
+        loan_amnt = 10000
+        loan_int_rate = 5.0
+        person_emp_length = 15
+        cb_person_default_on_file = "N"
+        cb_person_cred_hist_length = 20
+    
     if st.button("Predict"):
         try:
-            # Compute additional features
-            debt_to_income = loan_amnt / person_income if person_income > 0 else 0
-            age_group = pd.cut([person_age], bins=[0, 25, 35, 45, 55, 100], labels=['18-25', '26-35', '36-45', '46-55', '56+'])[0]
-            income_group = pd.cut([person_income], bins=[0, 30000, 60000, 100000, 200000, np.inf], labels=['Low', 'Lower-Middle', 'Middle', 'Upper-Middle', 'High'])[0]
-            
-            # Create input data
+            # Create input DataFrame from user inputs
             input_data = pd.DataFrame({
                 'person_age': [person_age],
                 'person_income': [person_income],
@@ -146,44 +188,99 @@ if page == "Prediction":
                 'person_emp_length': [person_emp_length],
                 'cb_person_default_on_file': [cb_person_default_on_file],
                 'cb_person_cred_hist_length': [cb_person_cred_hist_length],
-                'loan_percent_income': [loan_percent_income],
-                'debt_to_income': [debt_to_income],
-                'age_group': [age_group],
-                'income_group': [income_group]
+                'loan_percent_income': [loan_percent_income]
             })
             
-            # Encode categorical
-            input_data['loan_grade_encoded'] = le_loan_grade.transform([loan_grade])[0]
-            input_data['cb_person_default_on_file_encoded'] = le_default.transform([cb_person_default_on_file])[0]
+            # Create derived features
+            input_data['person_income_log'] = np.log1p(input_data['person_income'])
+            input_data['income_per_age'] = input_data['person_income'] / input_data['person_age']
+            input_data['emp_stability'] = input_data['person_emp_length'] / input_data['person_age']
+            input_data['debt_to_income'] = input_data['loan_amnt'] / input_data['person_income']
             
-            # One-hot encode
-            categorical_cols = ['person_home_ownership', 'loan_intent', 'age_group', 'income_group']
-            input_encoded = pd.get_dummies(input_data, columns=categorical_cols, drop_first=True)
+            # Create categorical groups
+            input_data['age_group'] = pd.cut(
+                input_data['person_age'], 
+                bins=[0, 25, 35, 45, 55, 100], 
+                labels=['18-25', '26-35', '36-45', '46-55', '56+']
+            )
+            input_data['income_group'] = pd.cut(
+                input_data['person_income'], 
+                bins=[0, 30000, 60000, 100000, 200000, np.inf], 
+                labels=['Low', 'Lower-Middle', 'Middle', 'Upper-Middle', 'High']
+            )
             
-            # Drop original string columns
-            input_encoded = input_encoded.drop(['loan_grade', 'cb_person_default_on_file'], axis=1)
+            # Encode categorical features
+            input_data['loan_grade_encoded'] = le_loan_grade.transform(input_data['loan_grade'])
+            input_data['cb_person_default_on_file_encoded'] = le_default.transform(input_data['cb_person_default_on_file'])
+            
+            # One-hot encode nominal features
+            input_data = pd.get_dummies(input_data, columns=['person_home_ownership', 'loan_intent', 'age_group', 'income_group'], drop_first=True)
+            
+            # Ensure all expected columns exist (add missing ones with 0)
+            expected_columns = [
+                'person_age', 'person_income', 'person_emp_length', 'loan_amnt', 'loan_int_rate',
+                'loan_percent_income', 'cb_person_cred_hist_length', 'person_income_log', 'income_per_age',
+                'emp_stability', 'debt_to_income', 'loan_grade_encoded', 'cb_person_default_on_file_encoded',
+                'person_home_ownership_OTHER', 'person_home_ownership_OWN', 'person_home_ownership_RENT',
+                'loan_intent_EDUCATION', 'loan_intent_HOMEIMPROVEMENT', 'loan_intent_MEDICAL',
+                'loan_intent_PERSONAL', 'loan_intent_VENTURE', 'age_group_26-35', 'age_group_36-45',
+                'age_group_46-55', 'age_group_56+', 'income_group_Lower-Middle', 'income_group_Middle',
+                'income_group_Upper-Middle', 'income_group_High'
+            ]
+            
+            for col in expected_columns:
+                if col not in input_data.columns:
+                    input_data[col] = 0
+            
+            # Reorder columns to match model expectations
+            input_data = input_data[expected_columns]
             
             # Scale numerical features
-            input_encoded[NUMERICAL_FEATURES] = scaler.transform(input_encoded[NUMERICAL_FEATURES])
+            numerical_cols = [
+                'person_age', 'person_income', 'person_emp_length', 'loan_amnt', 'loan_int_rate',
+                'loan_percent_income', 'cb_person_cred_hist_length', 'debt_to_income', 'person_income_log', 'income_per_age'
+            ]
+            input_data[numerical_cols] = scaler.transform(input_data[numerical_cols])
             
-            # Ensure all expected columns are present
-            for col in EXPECTED_MODEL_COLUMNS:
-                if col not in input_encoded.columns:
-                    input_encoded[col] = 0
+            # Try prediction
+            st.write("🔍 Debug - Input Values:")
+            st.write(f"Age: {person_age}, Income: {person_income}, Loan: {loan_amnt}")
+            st.write(f"Interest: {loan_int_rate}%, Employment: {person_emp_length} years")
+            st.write(f"Credit History: {cb_person_cred_hist_length} years, Grade: {loan_grade}")
             
-            input_encoded = input_encoded[EXPECTED_MODEL_COLUMNS]
+            prediction = model.predict(input_data)[0]
+            probability = model.predict_proba(input_data)[0][1]
             
-            # Predict
-            prediction = model.predict(input_encoded)[0]
-            probability = model.predict_proba(input_encoded)[0][1]
+            st.write("🔍 Debug - Model Output:")
+            st.write(f"Raw prediction: {prediction}")
+            st.write(f"Probability: {probability:.4f} ({probability:.2%})")
             
-            if prediction == 1:
-                st.error(f"High Risk of Default (Probability: {probability:.2%})")
+            # Dynamic risk classification based on probability thresholds
+            if probability >= 0.7:
+                st.error(f"🔴 Very High Risk of Default (Probability: {probability:.2%})")
+                risk_level = "Very High"
+            elif probability >= 0.5:
+                st.error(f"🔴 High Risk of Default (Probability: {probability:.2%})")
+                risk_level = "High"
+            elif probability >= 0.3:
+                st.warning(f"🟡 Moderate Risk of Default (Probability: {probability:.2%})")
+                risk_level = "Moderate"
+            elif probability >= 0.15:
+                st.success(f"🟢 Low Risk of Default (Probability: {probability:.2%})")
+                risk_level = "Low"
             else:
-                st.success(f"Low Risk of Default (Probability: {probability:.2%})")
+                st.success(f"🟢 Very Low Risk of Default (Probability: {probability:.2%})")
+                risk_level = "Very Low"
+            
+            # Show model prediction vs threshold explanation
+            st.info(f"💡 Model Prediction: {prediction} (1=Default, 0=No Default) | Probability: {probability:.2%}")
+                
         except Exception as e:
             st.error(f"Prediction failed: {e}")
-            st.write("This may be due to sklearn version incompatibility. Please retrain the model with the current sklearn version.")
+            st.write("Debug info:")
+            st.write(f"Model type: {type(model).__name__}")
+            import traceback
+            st.write(traceback.format_exc())
 
 elif page == "Batch Prediction":
     st.header("Batch Loan Default Prediction")
@@ -248,6 +345,8 @@ elif page == "Batch Prediction":
                     
                     # Compute additional features
                     debt_to_income = loan_amnt / person_income if person_income > 0 else 0
+                    person_income_log = np.log1p(person_income)  # log(1 + x) to handle zero
+                    income_per_age = person_income / person_age if person_age > 0 else 0
                     age_group = pd.cut([person_age], bins=[0, 25, 35, 45, 55, 100], labels=['18-25', '26-35', '36-45', '46-55', '56+'])[0]
                     income_group = pd.cut([person_income], bins=[0, 30000, 60000, 100000, 200000, np.inf], labels=['Low', 'Lower-Middle', 'Middle', 'Upper-Middle', 'High'])[0]
                     
@@ -265,6 +364,8 @@ elif page == "Batch Prediction":
                         'cb_person_cred_hist_length': [cb_person_cred_hist_length],
                         'loan_percent_income': [loan_percent_income],
                         'debt_to_income': [debt_to_income],
+                        'person_income_log': [person_income_log],
+                        'income_per_age': [income_per_age],
                         'age_group': [age_group],
                         'income_group': [income_group]
                     })
@@ -416,7 +517,7 @@ elif page == "Model Performance":
     
     try:
         X_test = pd.read_csv(str(PROJECT_ROOT / 'data' / 'processed' / 'X_test.csv'))
-        y_test = pd.read_csv(str(PROJECT_ROOT / 'data' / 'processed' / 'y_test.csv')).iloc[:, 0]
+        y_test = pd.read_csv(str(PROJECT_ROOT / 'data' / 'processed' / 'y_test.csv'), index_col=0).iloc[:, 0]
         
         # Predictions
         y_pred = model.predict(X_test)
@@ -453,6 +554,72 @@ elif page == "Model Performance":
         ax.set_ylabel('True Positive Rate')
         ax.set_title('ROC Curve')
         ax.legend()
+        st.pyplot(fig)
+        
+        st.subheader("Probability Distribution Analysis")
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        
+        # Distribution of predicted probabilities
+        ax1.hist(y_pred_proba, bins=50, alpha=0.7, edgecolor='black')
+        ax1.set_xlabel('Predicted Probability of Default')
+        ax1.set_ylabel('Frequency')
+        ax1.set_title('Distribution of Predicted Probabilities')
+        ax1.grid(True, alpha=0.3)
+        
+        # Probability distribution by actual class
+        ax2.hist(y_pred_proba[y_test == 0], bins=50, alpha=0.7, label='No Default', edgecolor='black')
+        ax2.hist(y_pred_proba[y_test == 1], bins=50, alpha=0.7, label='Default', edgecolor='black')
+        ax2.set_xlabel('Predicted Probability of Default')
+        ax2.set_ylabel('Frequency')
+        ax2.set_title('Probability Distribution by Actual Class')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        st.pyplot(fig)
+        
+        st.subheader("Threshold Analysis")
+        thresholds = np.arange(0.1, 0.9, 0.05)
+        precision_scores = []
+        recall_scores = []
+        f1_scores = []
+        
+        for threshold in thresholds:
+            y_pred_thresh = (y_pred_proba >= threshold).astype(int)
+            from sklearn.metrics import precision_score, recall_score, f1_score
+            precision_scores.append(precision_score(y_test, y_pred_thresh))
+            recall_scores.append(recall_score(y_test, y_pred_thresh))
+            f1_scores.append(f1_score(y_test, y_pred_thresh))
+        
+        optimal_idx = np.argmax(f1_scores)
+        optimal_threshold = thresholds[optimal_idx]
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(thresholds, precision_scores, marker='o', label='Precision')
+        ax.plot(thresholds, recall_scores, marker='s', label='Recall')
+        ax.plot(thresholds, f1_scores, marker='^', label='F1 Score')
+        ax.axvline(x=optimal_threshold, color='red', linestyle='--', label=f'Optimal: {optimal_threshold:.2f}')
+        ax.set_xlabel('Classification Threshold')
+        ax.set_ylabel('Score')
+        ax.set_title('Performance Metrics vs Classification Threshold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        st.pyplot(fig)
+        
+        st.write(f"**Optimal threshold (max F1): {optimal_threshold:.2f}**")
+        st.write(f"F1 Score at optimal threshold: {f1_scores[optimal_idx]:.3f}")
+        
+        st.subheader("PR Curve")
+        from sklearn.metrics import precision_recall_curve
+        precision, recall, _ = precision_recall_curve(y_test, y_pred_proba)
+        pr_auc = auc(recall, precision)
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.plot(recall, precision, color='blue', lw=2, label=f'PR curve (area = {pr_auc:.3f})')
+        ax.set_xlabel('Recall')
+        ax.set_ylabel('Precision')
+        ax.set_title('Precision-Recall Curve')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
         st.pyplot(fig)
         
     except FileNotFoundError:
@@ -551,8 +718,10 @@ elif page == "About":
     - Streamlit for the dashboard
     
     **Model Performance:**
-    - ROC AUC: ~0.95
-    - Focus on recall for identifying high-risk loans
+    - ROC AUC: ~0.93-0.95
+    - Random Forest with balanced class weights
+    - Robust preprocessing with outlier handling
+    - Focus on precision-recall balance for loan decisions
     
     For more details, see the project notebooks and README.
     """)
